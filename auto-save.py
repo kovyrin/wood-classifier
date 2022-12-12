@@ -41,6 +41,7 @@ class CustomSaveCallback(SaveModelCallback):
     def _save(self, name):
         best_fname = f'{name}_{self.best}'
         self.last_saved_path = self.learn.save(best_fname, with_opt=self.with_opt)
+        print("Saved to ", self.last_saved_path)
 
 print("Finding all images...")
 data_root=Path('/data/wood-species/hand-cleaned')
@@ -65,36 +66,30 @@ dls = DataBlock(
     get_y=get_name,
     splitter=FuncSplitter(lambda o: o.dataset == 'valid'),
     item_tfms=RandomResizedCrop(224, min_scale=0.5),
-    batch_tfms=aug_transforms(),
+    batch_tfms=[*aug_transforms(), RandomErasing(p=0.5, max_count=10, sh=0.1)],
 ).dataloaders(images, bs=32)
 
 model_dir = Path("/data/auto-save")
 model_dir.mkdir(parents=True, exist_ok=True)
 
-# latest_dump = str(sorted(data_dir.glob("wood-identifier-*.pkl.pth"))[-1]).replace('.pth', '')
-# print(f"Loading the latest version of the model from '{latest_dump}'...")
-
 learn = vision_learner(dls, resnet50, metrics=error_rate, path=model_dir)
-learn.load(model_dir / 'models/model')
+autoload_data = Path("/data/auto-save/models")
 
-lr_max = 1e-4
+best_model = str(sorted(autoload_data.glob("model_0.*.pth"))[0]).replace('.pth', '')
+print("Using the best model: ", best_model)
+learn.load(best_model)
+
 while True:
-    print("Starting training with lr_max=", lr_max)
-    learn.fit_one_cycle(
-        10,
-        lr_max=lr_max,
-        cbs=[
-            CustomSaveCallback(with_opt=True),
-            EarlyStoppingCallback(monitor='valid_loss', min_delta=0.01, patience=3)
-        ]
-    )
-
-    ts = int(time.time())
-    save_file = f"{model_dir}/wood-identifier-{ts}"
-    print(f"Saving the model to '{save_file}'...")
-    learn.save(save_file)
-    print("Done!")
-
     lr = learn.lr_find()
     lr_max = lr.valley
+
+    print("Training with lr_max=", lr_max)
+    learn.fit_one_cycle(
+        20, 
+        lr_max=slice(lr_max), 
+        cbs=[
+            CustomSaveCallback(with_opt=True), 
+            EarlyStoppingCallback(monitor='valid_loss', min_delta=0.01, patience=5)
+        ]
+    )
 
